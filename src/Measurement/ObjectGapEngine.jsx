@@ -1,5 +1,8 @@
 // Illustrator Smart Spacing Manager Pro
 // Measurement/ObjectGapEngine.jsx — Object-to-object gap measurement
+// Coordinate convention: Illustrator geometricBounds = [left, top, right, bottom]
+// where top > bottom. Vertical gap = upperObject.bottom - lowerObject.top.
+// Positive = separated, zero = touching, negative = overlap.
 var SSM = SSM || {};
 SSM.ObjectGapEngine = (function () {
     var BM = SSM.BoundsManager;
@@ -9,8 +12,9 @@ SSM.ObjectGapEngine = (function () {
         var ub = BM.boundsOfItem(upperItem, boundsType);
         var lb = BM.boundsOfItem(lowerItem, boundsType);
         if (!ub.valid || !lb.valid) { return null; }
-        // Gap = Lower.top - Upper.bottom (positive = separated, negative = overlap)
-        var gap = lb.top - ub.bottom;
+        // Gap = UpperObjectBottom - LowerObjectTop
+        // Positive = separated, zero = touching, negative = overlap
+        var gap = ub.bottom - lb.top;
         var overlaps = gap < 0;
         return {
             mode: "object",
@@ -33,6 +37,7 @@ SSM.ObjectGapEngine = (function () {
         var lb = BM.boundsOfItem(leftItem, boundsType);
         var rb = BM.boundsOfItem(rightItem, boundsType);
         if (!lb.valid || !rb.valid) { return null; }
+        // Gap = RightObjectLeft - LeftObjectRight
         var gap = rb.left - lb.right;
         var overlaps = gap < 0;
         return {

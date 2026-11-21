@@ -28,12 +28,13 @@ jobs:
       - name: Run unit tests
         run: npm test
 
-      - name: Static validation (ES3 + build)
-        run: |
-          npm run validate:es3 || true
-          npm run validate:build || true
+      - name: Static validation: ES3 compatibility
+        run: npm run validate:es3
 
-      - name: Build JSX
+      - name: Static validation: build artifact
+        run: npm run validate:build
+
+      - name: Build JSX (reproducible)
         run: |
           npm run build
           SOURCE_DATE_EPOCH=${{ github.event.release.published_at || github.event.head_commit.timestamp || '' }} npm run build
@@ -50,12 +51,41 @@ jobs:
             dist/Illustrator_Smart_Spacing_Manager_Pro.jsx.sha256
             dist/release-meta.json
 
-      - name: Publish release asset (on release)
+      - name: Create or update release (on release event)
         if: github.event_name == 'release'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "${{ github.event.release.tag_name }}" \
+          # Ensure the release exists; create it if missing (e.g. for tag pushes without a release)
+          if ! gh release view "${{ github.ref_name }}" --json id >/dev/null 2>&1; then
+            gh release create "${{ github.ref_name }}" --target "${{ github.sha }}" \
+              --title "Illustrator Smart Spacing Manager Pro ${{ github.ref_name }}" \
+              --notes "Automated build from ${{ github.sha }}" --prerelease
+          fi
+
+      - name: Publish release assets (on release)
+        if: github.event_name == 'release'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" \
             dist/Illustrator_Smart_Spacing_Manager_Pro.jsx \
             dist/Illustrator_Smart_Spacing_Manager_Pro.jsx.sha256 \
-            dist/release-meta.json --clobber || true
+            dist/release-meta.json --clobber
+
+      - name: Verify release assets via API
+        if: github.event_name == 'release'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ASSET_COUNT=$(gh api "repos/${{ github.repository }}/releases/tags/${{ github.ref_name }}" --jq '.assets | length')
+          echo "Release asset count: $ASSET_COUNT"
+          if [ "$ASSET_COUNT" -lt 3 ]; then
+            echo "ERROR: Expected at least 3 assets (JSX, SHA-256, metadata), found $ASSET_COUNT" >&2
+            exit 1
+          fi
+          # Verify the JSX asset exists
+          gh api "repos/${{ github.repository }}/releases/tags/${{ github.ref_name }}" --jq '.assets[] | select(.name == "Illustrator_Smart_Spacing_Manager_Pro.jsx") | .name' >/dev/null || {
+            echo "ERROR: JSX asset not found in release" >&2
+            exit 1
+          }

@@ -127,6 +127,35 @@ SSM.RuleEngine = (function () {
     }
     function clear() { rules = []; }
     function count() { return rules.length; }
+    // Resolve the single most applicable rule for a section using:
+    // section type, detection method, detection criteria, scope, direction,
+    // measurement mode, and priority. Returns null if no rule matches.
+    function resolveRuleForSection(section, rules) {
+        rules = rules || getAll();
+        var candidates = [];
+        for (var i = 0; i < rules.length; i++) {
+            var rule = rules[i];
+            if (!rule.enabled) { continue; }
+            var score = 0;
+            // Scope match
+            if (rule.scope === C.SCOPES.SECTIONS || rule.scope === C.SCOPES.DOCUMENT) { score += 4; }
+            else if (rule.scope === C.SCOPES.SELECTION) { score += 2; }
+            // Section type match via detection config
+            if (rule.detectionConfig && rule.detectionConfig.sectionType &&
+                section.type === rule.detectionConfig.sectionType) { score += 3; }
+            // Detection method relevance
+            if (rule.detectionMethod === C.DETECTION_METHODS.COMBINED) { score += 2; }
+            else if (rule.detectionMethod === C.DETECTION_METHODS.MANUAL) { score += 1; }
+            // Direction match (vertical preferred for section stacking; but honor rule's direction)
+            if (rule.direction === C.DIRECTIONS.VERTICAL) { score += 1; }
+            // Priority (higher = more specific)
+            score += (rule.priority || 0);
+            candidates.push({ rule: rule, score: score });
+        }
+        if (candidates.length === 0) { return null; }
+        candidates.sort(function (a, b) { return b.score - a.score; });
+        return candidates[0].rule;
+    }
     return {
         createRule: createRule,
         getRule: getRule,
@@ -139,6 +168,7 @@ SSM.RuleEngine = (function () {
         reorderRule: reorderRule,
         setPriority: setPriority,
         sortByPriority: sortByPriority,
+        resolveRuleForSection: resolveRuleForSection,
         clear: clear,
         count: count
     };

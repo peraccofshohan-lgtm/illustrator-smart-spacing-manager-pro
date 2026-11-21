@@ -32,14 +32,14 @@ var MODULES = [
     "src/Rules/ConflictResolver.jsx",
     "src/Rules/PresetManager.jsx",
     "src/Spacing/SpacingCalculator.jsx",
-    "src/Spacing/SpacingEngine.jsx",
     "src/Spacing/PositionManager.jsx",
-    "src/Preview/PreviewEngine.jsx",
-    "src/Preview/PreviewRenderer.jsx",
-    "src/Batch/BatchProcessor.jsx",
     "src/Safety/TemporaryObjectManager.jsx",
     "src/Safety/TransactionManager.jsx",
     "src/Safety/RollbackManager.jsx",
+    "src/Spacing/SpacingEngine.jsx",
+    "src/Preview/PreviewEngine.jsx",
+    "src/Preview/PreviewRenderer.jsx",
+    "src/Batch/BatchProcessor.jsx",
     "src/UI/UIHelpers.jsx",
     "src/UI/Dashboard.jsx",
     "src/UI/DetectionPanel.jsx",
@@ -130,41 +130,75 @@ test("Compatibility JSON", function (SSM) {
 
 test("Bounds normalization", function (SSM) {
     var BM = SSM.BoundsManager;
+    // Illustrator: [left, top, right, bottom] where top > bottom
     var b = BM.normalize([10, 100, 110, 0]);
-    assert(b.left === 10 && b.right === 110 && b.top === 0 && b.bottom === 100, "normalize bounds");
+    assert(b.left === 10 && b.right === 110, "normalize left/right");
+    assert(b.top === 100 && b.bottom === 0, "normalize top>bottom (Illustrator convention)");
     assert(b.width === 100 && b.height === 100, "normalize wh");
+    // Union: top = max of tops, bottom = min of bottoms
     var u = BM.union([BM.normalize([0, 10, 10, 0]), BM.normalize([5, 15, 20, 5])]);
-    assert(u.left === 0 && u.right === 20 && u.top === 0 && u.bottom === 15, "union");
-    var ov = BM.overlap(BM.normalize([0, 20, 10, 0]), BM.normalize([5, 15, 15, 5]));
-    assert(ov === true, "overlap true");
-    var ov2 = BM.overlap(BM.normalize([0, 20, 10, 0]), BM.normalize([12, 25, 22, 5]));
-    assert(ov2 === false, "overlap false");
+    assert(u.left === 0 && u.right === 20, "union left/right");
+    assert(u.top === 15 && u.bottom === 0, "union top=max, bottom=min");
+    assert(u.height === 15, "union height");
+    // Overlap: vertically separated if upper.bottom > lower.top
+    var ov = BM.overlap(BM.normalize([0, 100, 10, 60]), BM.normalize([0, 40, 15, 0]));
+    assert(ov === false, "overlap false (separated, gap=20)");
+    var ov2 = BM.overlap(BM.normalize([0, 100, 10, 50]), BM.normalize([0, 60, 15, 0]));
+    assert(ov2 === true, "overlap true (gap=-10)");
+    var ov3 = BM.overlap(BM.normalize([0, 100, 10, 60]), BM.normalize([0, 60, 15, 0]));
+    assert(ov3 === false, "overlap false (touching, gap=0)");
 });
 
 test("Object gap engine", function (SSM) {
     var OGE = SSM.ObjectGapEngine;
-    // upper above lower in screen coords: upper y 0..40, lower y 60..100 => gap 20
-    var upper = { original: { geometricBounds: [0, 40, 100, 0] } };   // norm top=0 bottom=40
-    var lower = { original: { geometricBounds: [0, 100, 100, 60] } }; // norm top=60 bottom=100
+    // Illustrator convention: [left, top, right, bottom], top > bottom.
+    // Upper object occupies y [60, 100], lower object occupies y [0, 40].
+    // Gap = upper.bottom - lower.top = 60 - 40 = 20 (positive = separated).
+    var upper = { original: { geometricBounds: [0, 100, 100, 60] } }; // bottom=60
+    var lower = { original: { geometricBounds: [0, 40, 100, 0] } };   // top=40
     var g = OGE.verticalGap(upper, lower, "geometric");
     assert(g.gap === 20, "vertical gap = 20 separated");
     assert(g.overlaps === false, "no overlap");
     assert(g.signedGap === 20, "signed gap 20");
-    // overlap: upper bottom=40, lower top=10 => gap -30
-    var ov = OGE.verticalGap(
+    assert(g.upperBottom === 60, "upper bottom = 60");
+    assert(g.lowerTop === 40, "lower top = 40");
+    // Zero gap (touching): upper.bottom === lower.top
+    var touch = OGE.verticalGap(
+        { original: { geometricBounds: [0, 100, 100, 40] } },
         { original: { geometricBounds: [0, 40, 100, 0] } },
-        { original: { geometricBounds: [0, 30, 100, 10] } },
         "geometric"
     );
-    assert(ov.gap === -30, "overlap gap -30");
+    assert(touch.gap === 0, "zero gap (touching)");
+    assert(touch.overlaps === false, "touching is not overlap");
+    // Negative gap (overlap): upper.bottom < lower.top
+    var ov = OGE.verticalGap(
+        { original: { geometricBounds: [0, 100, 100, 50] } }, // bottom=50
+        { original: { geometricBounds: [0, 60, 100, 0] } },   // top=60
+        "geometric"
+    );
+    assert(ov.gap === -10, "overlap gap = -10");
     assert(ov.overlaps === true, "overlap detected");
-    assert(ov.signedGap === -30, "signed gap -30");
+    assert(ov.signedGap === -10, "signed gap -10");
+    // Different dimensions
+    var diff = OGE.verticalGap(
+        { original: { geometricBounds: [10, 200, 90, 150] } }, // bottom=150
+        { original: { geometricBounds: [5, 140, 95, 0] } },    // top=140
+        "geometric"
+    );
+    assert(diff.gap === 10, "gap with different dimensions = 10");
+    // Horizontal gap: left object right edge to right object left edge
+    // Left item [0, 100, 50, 0]: right=50. Right item [100, 100, 150, 0]: left=100. Gap = 100-50=50.
     var hg = OGE.horizontalGap(
         { original: { geometricBounds: [0, 100, 50, 0] } },
-        { original: { geometricBounds: [100, 100, 200, 0] } },
-        "geometric"
+        { original: { geometricBounds: [100, 100, 150, 0] } }
     );
-    assert(hg.gap === 100 - 50, "horizontal gap 50");
+    assert(hg.gap === 50, "horizontal gap = 50");
+    var hgOverlap = OGE.horizontalGap(
+        { original: { geometricBounds: [0, 100, 80, 0] } },   // right=80
+        { original: { geometricBounds: [70, 100, 150, 0] } }  // left=70 (overlap)
+    );
+    assert(hgOverlap.gap === -10, "horizontal overlap gap = -10");
+    assert(hgOverlap.overlaps === true, "horizontal overlap detected");
     var dir = OGE.detectDirection({ gap: 30 }, { gap: 10 });
     assert(dir === "vertical", "detect vertical");
     var dir2 = OGE.detectDirection({ gap: 10 }, { gap: 30 });
@@ -176,13 +210,27 @@ test("Visual gap engine", function (SSM) {
     var item = { original: { typename: "TextFrame", visibleBounds: [0, 100, 100, 0], geometricBounds: [0, 100, 100, 0] } };
     var mb = VGE.measureVisualBounds(item, null);
     assert(mb && mb.bounds && mb.bounds.valid, "visual bounds valid");
+    assert(mb.bounds.top === 100 && mb.bounds.bottom === 0, "visual bounds preserve Illustrator convention");
     assert(mb.method === "visualOutline" || mb.method === "geometricFallback", "method set");
+    assert(mb.approximation === true, "text frame visual is approximate");
+    // Upper [0,100,100,60] bottom=60, Lower [0,40,100,0] top=40 => gap = 20
     var vg = VGE.visualVerticalGap(
-        { original: { typename: "TextFrame", visibleBounds: [0, 100, 100, 60] } },
-        { original: { typename: "TextFrame", visibleBounds: [0, 40, 100, 0] } },
+        { original: { typename: "TextFrame", visibleBounds: [0, 100, 100, 60], geometricBounds: [0, 100, 100, 60] } },
+        { original: { typename: "TextFrame", visibleBounds: [0, 40, 100, 0], geometricBounds: [0, 40, 100, 0] } },
         null
     );
     assert(vg && typeof vg.gap === "number", "visual vertical gap number");
+    assert(vg.gap === 20, "visual gap = 20");
+    assert(vg.upperBottom === 60, "visual upper bottom = 60");
+    assert(vg.lowerTop === 40, "visual lower top = 40");
+    // Horizontal visual gap
+    var hg = VGE.visualHorizontalGap(
+        { original: { typename: "TextFrame", visibleBounds: [0, 100, 50, 0], geometricBounds: [0, 100, 50, 0] } },
+        { original: { typename: "TextFrame", visibleBounds: [100, 100, 150, 0], geometricBounds: [100, 100, 150, 0] } },
+        null
+    );
+    assert(hg && typeof hg.gap === "number", "visual horizontal gap number");
+    assert(hg.gap === 50, "visual horizontal gap = 50");
 });
 
 test("Measurement normalizer", function (SSM) {
@@ -376,24 +424,36 @@ test("Spacing engine apply", function (SSM) {
     var SE = SSM.SpacingEngine;
     var upper = { id: 1, name: "U", original: { geometricBounds: [0, 100, 100, 60], visibleBounds: [0, 100, 100, 60], translate: function (dx, dy) { var b = this.geometricBounds; this.geometricBounds = [b[0] + dx, b[1] - dy, b[2] + dx, b[3] - dy]; this.visibleBounds = this.geometricBounds.slice(); } } };
     var lower = { id: 2, name: "L", original: { geometricBounds: [0, 40, 100, 0], visibleBounds: [0, 40, 100, 0], translate: function (dx, dy) { var b = this.geometricBounds; this.geometricBounds = [b[0] + dx, b[1] - dy, b[2] + dx, b[3] - dy]; this.visibleBounds = this.geometricBounds.slice(); } } };
-    var m = { gap: 40 - 60, overlaps: false, signedGap: -20 };
-    var res = SE.applyToPair(upper, lower, m, 20, "moveLower", null);
+    // Correct Illustrator semantics: gap = upper.bottom - lower.top = 60 - 40 = 20
+    var m = { gap: 20, overlaps: false, signedGap: 20 };
+    var res = SE.applyToPair(upper, lower, m, 40, "moveLower", null);
     assert(res.success === true, "apply success");
-    assert(res.calculation.differencePt === 40, "diff to target 40");
+    assert(res.calculation.differencePt === 20, "diff to target 40 (target 40 - current 20 = 20)");
+    assert(res.movement.moveLower === 20, "move lower by 20");
 });
 
 test("Preview engine", function (SSM) {
     var PE = SSM.PreviewEngine;
     var sections = [
-        { id: "s1", name: "Ch4", enabled: true, anchor: { id: "a", name: "Anchor", original: { geometricBounds: [0, 100, 100, 60] } }, target: { id: "b", name: "Target", original: { geometricBounds: [0, 40, 100, 0] } } }
+        { id: "s1", name: "Ch4", enabled: true, type: "heading", anchor: { id: "a", name: "Anchor", original: { geometricBounds: [0, 100, 100, 60] } }, target: { id: "b", name: "Target", original: { geometricBounds: [0, 40, 100, 0] } } }
     ];
-    var rules = [{ id: "r1", name: "R", enabled: true, measurementMode: "object", boundsType: "geometric", direction: "vertical", anchorBehavior: "moveLower", targetGap: 20, unit: "pt" }];
+    var rules = [{ id: "r1", name: "R", enabled: true, priority: 10, measurementMode: "object", boundsType: "geometric", direction: "vertical", anchorBehavior: "moveLower", targetGap: 20, unit: "pt" }];
     var entries = PE.buildPreview(sections, rules, null);
     assert(entries.length === 1, "one preview entry");
     assert(entries[0].sectionName === "Ch4", "section name");
-    // upper bottom=100, lower top=0 => gap=-100; target 20 => difference 120
-    assert(entries[0].currentGap === -100, "current gap -100");
-    assert(entries[0].difference === 120, "difference computed");
+    assert(entries[0].ruleId === "r1", "resolved rule preserved");
+    assert(entries[0].measurementMode === "object", "measurement mode preserved");
+    assert(entries[0].direction === "vertical", "direction preserved");
+    // Correct Illustrator semantics: gap = upper.bottom - lower.top = 60 - 40 = 20
+    assert(entries[0].currentGap === 20, "current gap = 20");
+    assert(entries[0].targetGap === 20, "target gap = 20");
+    assert(entries[0].difference === 0, "difference = 0 (already at target)");
+    // Test with different target: target 40 => difference 20
+    var rules2 = [{ id: "r2", name: "R2", enabled: true, priority: 10, measurementMode: "object", boundsType: "geometric", direction: "vertical", anchorBehavior: "moveLower", targetGap: 40, unit: "pt" }];
+    var entries2 = PE.buildPreview(sections, rules2, null);
+    assert(entries2.length === 1, "one preview entry (rules2)");
+    assert(entries2[0].difference === 20, "difference = 20 (target 40 - current 20)");
+    assert(entries2[0].moveLower === 20, "move lower by 20");
 });
 
 test("Preview renderer cleanup", function (SSM) {
@@ -460,6 +520,97 @@ test("Logger", function (SSM) {
     L.clear();
     assert(L.getEntries().length === 0, "logger cleared");
 });
+
+// ============ END-TO-END INTEGRATION TESTS ============
+test("E2E: detect chapter headings, create section, preview, apply, verify gap", function (SSM) {
+    var app = SSM.__testApp;
+    var doc = app.doc;
+    doc.pageItems = [];
+    // Two chapter headings with body text below
+    doc.pageItems.push(makeTextItem("Chapter 4", [0, 200, 200, 180], "tf-ch4"));   // bottom=180
+    doc.pageItems.push(makeTextItem("Body text 4", [0, 160, 200, 0], "tf-body4"));  // top=160
+    doc.pageItems.push(makeTextItem("Chapter 5", [0, 400, 200, 380], "tf-ch5"));    // bottom=380
+    doc.pageItems.push(makeTextItem("Body text 5", [0, 360, 200, 0], "tf-body5"));  // top=360
+
+    // Detect by text pattern
+    var det = SSM.TextDetection.run(doc, { pattern: "Chapter", matchType: "contains", caseSensitive: false, wholeWord: false, useRegex: true });
+    assert(det.items.length === 2, "E2E: detected 2 chapter headings");
+
+    // Create sections: heading -> body
+    var SM = SSM.SectionManager;
+    SM.clear();
+    var s1 = SM.createSection("Chapter 4 section", "heading", det.items[0], null, "chapters");
+    SM.setTarget(s1.id, { id: "tf-body4", name: "Body text 4", original: { geometricBounds: [0, 160, 200, 0] } });
+    var s2 = SM.createSection("Chapter 5 section", "heading", det.items[1], null, "chapters");
+    SM.setTarget(s2.id, { id: "tf-body5", name: "Body text 5", original: { geometricBounds: [0, 360, 200, 0] } });
+    assert(SM.count() === 2, "E2E: 2 sections created");
+
+    // Create a rule
+    var RE = SSM.RuleEngine;
+    RE.clear();
+    var rule = RE.createRule({ name: "Chapter to Body", priority: 10, measurementMode: "object", boundsType: "geometric", direction: "vertical", anchorBehavior: "moveLower", targetGap: 40, unit: "pt", enabled: true });
+    assert(rule.rule, "E2E: rule created");
+
+    // Build preview
+    var PE = SSM.PreviewEngine;
+    var entries = PE.buildPreview(SM.getAll(), RE.getAll(), doc);
+    assert(entries.length === 2, "E2E: 2 preview entries");
+
+    // Section 1: gap = 180 - 160 = 20, target = 40, diff = 20, moveLower = 20
+    assert(entries[0].currentGap === 20, "E2E: section 1 gap = 20");
+    assert(entries[0].difference === 20, "E2E: section 1 diff = 20");
+    assert(entries[0].moveLower === 20, "E2E: section 1 move lower = 20");
+
+    // Apply all
+    var SE = SSM.SpacingEngine;
+    var applyResult = SE.applyToSections(SM.getAll(), RE.getAll(), doc);
+    assert(applyResult.success === true, "E2E: apply all success");
+    assert(applyResult.results.length === 2, "E2E: 2 results");
+
+    // Verify sections were processed
+    assert(applyResult.results.length === 2, "E2E: 2 results");
+    assert(applyResult.results[0].sectionId.indexOf("sec-") === 0, "E2E: section id present");
+    assert(applyResult.results[1].sectionId.indexOf("sec-") === 0, "E2E: section id present");
+
+    // Verify rule conflicts are detected
+    var CR = SSM.ConflictResolver;
+    var conflicts = CR.detectConflicts(RE.getAll(), SM.getAll());
+    assert(conflicts.length === 0, "E2E: no conflicts for single rule");
+
+    SM.clear();
+    RE.clear();
+});
+
+test("E2E: conflicting rules detected before apply", function (SSM) {
+    var RE = SSM.RuleEngine;
+    RE.clear();
+    RE.createRule({ name: "Rule A", priority: 10, measurementMode: "object", direction: "vertical", targetGap: 40, unit: "pt", scope: "document", enabled: true });
+    RE.createRule({ name: "Rule B", priority: 5, measurementMode: "object", direction: "vertical", targetGap: 60, unit: "pt", scope: "document", enabled: true });
+    var CR = SSM.ConflictResolver;
+    var conflicts = CR.detectConflicts(RE.getAll(), []);
+    assert(conflicts.length >= 1, "E2E: conflicting rules detected");
+    assert(conflicts[0].severity === "high", "E2E: conflict severity high");
+    RE.clear();
+});
+
+test("E2E: rollback on failure", function (SSM) {
+    var RM = SSM.RollbackManager;
+    var failingFn = function () { throw new Error("mid-operation failure"); };
+    var result = RM.safeOperation(failingFn, [{ id: 1, name: "test", original: { geometricBounds: [0, 100, 100, 0] } }]);
+    assert(result.success === false, "E2E: safe operation failed");
+    assert(result.error.indexOf("mid-operation failure") !== -1, "E2E: error captured");
+});
+
+function makeTextItem(contents, bounds, id) {
+    return {
+        id: id, name: contents, typename: "TextFrame",
+        contents: contents, locked: false, hidden: false,
+        geometricBounds: bounds, visibleBounds: bounds,
+        width: Math.abs(bounds[2] - bounds[0]), height: Math.abs(bounds[3] - bounds[1]),
+        layer: { name: "L1" },
+        textFont: { name: "Arial", style: "Regular" }, size: 12
+    };
+}
 
 // Wire mock app into SSM namespace so detection tests can reach it
 var SSM = loadModules();

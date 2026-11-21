@@ -21,7 +21,7 @@ SSM.PositionManager = (function () {
         snapshots.push(snapshot);
         return snapshot.id;
     }
-    function restore(snapshotId) {
+    function restore(snapshotId, doc) {
         var snap = null;
         var idx = -1;
         for (var i = 0; i < snapshots.length; i++) {
@@ -29,15 +29,43 @@ SSM.PositionManager = (function () {
         }
         if (!snap) { return false; }
         var ok = true;
+        var restored = 0;
         for (var i = 0; i < snap.items.length; i++) {
             var entry = snap.items[i];
-            // find current item by id (best effort)
-            var current = null;
-            // We rely on caller passing live items; restore positions via moveItemBy delta
+            if (!entry.position) { continue; }
+            // Find the live item by id in the document
+            var liveItem = findLiveItem(entry.id, doc);
+            if (!liveItem) { ok = false; continue; }
+            try {
+                var cur = liveItem.geometricBounds;
+                if (cur && cur.length === 4) {
+                    var dx = entry.position.left - cur[0];
+                    // Illustrator: dy positive moves down (screen coords). In Illustrator coords,
+                    // moving top from cur[1] to entry.position.top means translate y by -(entry.position.top - cur[1]).
+                    var dy = -(entry.position.top - cur[1]);
+                    liveItem.translate(dx, dy);
+                    restored++;
+                }
+            } catch (e) {
+                SSM.Logger.warn("PositionManager.restore: failed to restore " + entry.id, e);
+                ok = false;
+            }
         }
-        // Removal of snapshot after restore
-        snapshots.splice(idx, 1);
+        // Remove snapshot only if restoration succeeded
+        if (ok) {
+            snapshots.splice(idx, 1);
+        }
         return ok;
+    }
+    function findLiveItem(id, doc) {
+        if (!doc) { return null; }
+        try {
+            var items = doc.pageItems;
+            for (var i = 0; i < items.length; i++) {
+                if (items[i] && items[i].id == id) { return items[i]; }
+            }
+        } catch (e) { /* ignore */ }
+        return null;
     }
     function getSnapshot(snapshotId) {
         for (var i = 0; i < snapshots.length; i++) {

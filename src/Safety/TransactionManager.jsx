@@ -4,14 +4,16 @@ var SSM = SSM || {};
 SSM.TransactionManager = (function () {
     var PositionManager = SSM.PositionManager;
     var active = null;
-    function begin(items) {
+    function begin(items, doc) {
         active = {
             id: SSM.Compat.uid("txn"),
             start: SSM.Compat.now(),
             snapshotId: PositionManager.capture(items),
+            doc: doc,
             steps: [],
             committed: false,
-            rolledBack: false
+            rolledBack: false,
+            restorationSucceeded: false
         };
         return active.id;
     }
@@ -27,19 +29,26 @@ SSM.TransactionManager = (function () {
     }
     function rollback() {
         if (!active) { return false; }
-        if (active.snapshotId) {
-            PositionManager.restore(active.snapshotId);
+        if (active.snapshotId && active.doc) {
+            active.restorationSucceeded = PositionManager.restore(active.snapshotId, active.doc);
+        } else if (active.snapshotId) {
+            active.restorationSucceeded = PositionManager.restore(active.snapshotId);
         }
         active.rolledBack = true;
+        var ok = active.restorationSucceeded;
         active = null;
-        return true;
+        return ok;
     }
     function getActive() { return active; }
+    function restorationSucceeded() {
+        return active ? active.restorationSucceeded : null;
+    }
     return {
         begin: begin,
         recordStep: recordStep,
         commit: commit,
         rollback: rollback,
-        getActive: getActive
+        getActive: getActive,
+        restorationSucceeded: restorationSucceeded
     };
 })();

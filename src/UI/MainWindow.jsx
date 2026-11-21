@@ -76,7 +76,7 @@ SSM.UI.MainWindow = (function () {
                 var e = entries[i];
                 list.add("item", e.sectionName + ": " + e.currentDisplay + " → " + e.targetDisplay + " (Δ" + e.diffDisplay + ")");
             }
-            var summary = getStaticText(preview.panel, "Preview entries: " + entries.length);
+            var summary = getStaticText(preview.panel, "Preview entries: ");
             if (summary) { summary.text = "Preview entries: " + entries.length; }
             app.state.set("previewEntries", entries);
             if (st.previewIndicators) {
@@ -88,28 +88,66 @@ SSM.UI.MainWindow = (function () {
             var st = app.state.get();
             var entries = st.previewEntries || [];
             if (entries.length === 0) { alert("No preview entries to apply."); return; }
-            var applied = 0;
             var doc = SSM.DocumentManager.getActiveDocument();
+            if (!doc) { alert("No active document."); return; }
+            // Detect conflicts before applying
+            var conflicts = SSM.ConflictResolver.detectConflicts(st.rules, st.sections);
+            if (conflicts.length > 0) {
+                var msgs = [];
+                for (var c = 0; c < conflicts.length; c++) { msgs.push(conflicts[c].message); }
+                if (!confirm("Rule conflicts detected:\n" + msgs.join("\n") + "\n\nContinue anyway?")) { return; }
+            }
+            var applied = 0;
+            var failed = 0;
             for (var i = 0; i < entries.length; i++) {
                 var e = entries[i];
+                // Use the SAME resolved rule from the preview entry
+                var rule = SSM.RuleEngine.getRule(e.ruleId);
+                if (!rule || !rule.enabled) { failed++; continue; }
                 var anchor = findItemById(st.sections, e.anchorId);
                 var target = findItemById(st.sections, e.targetId);
-                if (!anchor || !target) { continue; }
-                var measurement = SSM.ObjectGapEngine.verticalGap(anchor.original, target.original, st.boundsType);
-                if (!measurement) { continue; }
-                var targetPt = SSM.MeasurementNormalizer.targetGapToPoints(e.targetGap, st.unit);
-                var result = SSM.SpacingEngine.applyToPair(anchor, target, measurement, targetPt, st.anchorBehavior, doc);
-                if (result.success) { applied++; }
+                if (!anchor || !target) { failed++; continue; }
+                // Re-measure using the same method as the preview
+                var measurement = null;
+                if (e.measurementMode === "visual") {
+                    if (e.direction === C.DIRECTIONS.HORIZONTAL) {
+                        measurement = SSM.VisualGapEngine.visualHorizontalGap(anchor.original, target.original, doc);
+                    } else {
+                        measurement = SSM.VisualGapEngine.visualVerticalGap(anchor.original, target.original, doc);
+                    }
+                } else {
+                    if (e.direction === C.DIRECTIONS.HORIZONTAL) {
+                        measurement = SSM.ObjectGapEngine.horizontalGap(anchor.original, target.original, e.boundsType);
+                    } else {
+                        measurement = SSM.ObjectGapEngine.verticalGap(anchor.original, target.original, e.boundsType);
+                    }
+                }
+                if (!measurement) { failed++; continue; }
+                var targetPt = SSM.MeasurementNormalizer.targetGapToPoints(e.targetGap, e.unit);
+                var result = SSM.SpacingEngine.applyToPair(anchor, target, measurement, targetPt, e.anchorBehavior, doc);
+                if (result.success) { applied++; } else { failed++; }
                 e.applied = true;
             }
-            alert("Applied to " + applied + " section(s).");
+            alert("Applied to " + applied + " section(s)." + (failed > 0 ? " (" + failed + " failed)" : ""));
             dashboard.refresh();
         }
         function applyAll() {
             var st = app.state.get();
             var doc = SSM.DocumentManager.getActiveDocument();
-            var results = SSM.SpacingEngine.applyToSections(st.sections, st.rules, doc);
-            alert("Apply all complete: " + results.length + " section(s) processed.");
+            if (!doc) { alert("No active document."); return; }
+            // Detect conflicts before applying
+            var conflicts = SSM.ConflictResolver.detectConflicts(st.rules, st.sections);
+            if (conflicts.length > 0) {
+                var msgs = [];
+                for (var c = 0; c < conflicts.length; c++) { msgs.push(conflicts[c].message); }
+                if (!confirm("Rule conflicts detected:\n" + msgs.join("\n") + "\n\nContinue anyway?")) { return; }
+            }
+            var result = SSM.SpacingEngine.applyToSections(st.sections, st.rules, doc);
+            if (result.success) {
+                alert("Apply all complete: " + result.results.length + " section(s) processed.");
+            } else {
+                alert("Apply all failed: " + result.error + ". Partial changes may have been rolled back.");
+            }
             dashboard.refresh();
         }
         function getListBox(panel) {

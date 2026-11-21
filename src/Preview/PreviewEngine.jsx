@@ -9,14 +9,10 @@ SSM.PreviewEngine = (function () {
         for (var s = 0; s < sections.length; s++) {
             var section = sections[s];
             if (!section.enabled || !section.anchor || !section.target) { continue; }
-            var rule = findRule(rules, section);
+            // Resolve the specific rule for this section deterministically
+            var rule = SSM.RuleEngine.resolveRuleForSection(section, rules);
             if (!rule || !rule.enabled) { continue; }
-            var measurement = null;
-            if (rule.measurementMode === "visual") {
-                measurement = SSM.VisualGapEngine.visualVerticalGap(section.anchor.original, section.target.original, doc);
-            } else {
-                measurement = SSM.ObjectGapEngine.verticalGap(section.anchor.original, section.target.original, rule.boundsType);
-            }
+            var measurement = measureForRule(section, rule, doc);
             if (!measurement) { continue; }
             var targetPt = SSM.MeasurementNormalizer.targetGapToPoints(rule.targetGap, rule.unit);
             var calc = SSM.SpacingCalculator.calculate(measurement, targetPt);
@@ -29,17 +25,21 @@ SSM.PreviewEngine = (function () {
                 targetId: section.target.id,
                 anchorName: section.anchor.name,
                 targetName: section.target.name,
-                detectionMethod: section.anchor.detectionReasons ? section.anchor.detectionReasons.join(", ") : rule.detectionMethod,
+                ruleId: rule.id,
+                ruleName: rule.name,
+                detectionMethod: rule.detectionMethod,
                 measurementMode: rule.measurementMode,
+                boundsType: rule.boundsType,
                 direction: rule.direction,
+                anchorBehavior: rule.anchorBehavior,
+                unit: rule.unit,
+                precision: rule.precision || 2,
                 currentGap: calc.currentGapPt,
                 targetGap: calc.targetGapPt,
                 difference: calc.differencePt,
                 absDifference: calc.absDifference,
                 moveUpper: movement.moveUpper,
                 moveLower: movement.moveLower,
-                unit: rule.unit,
-                precision: rule.precision || 2,
                 overlaps: calc.overlaps,
                 reliability: measurement.reliability || "exact",
                 method: measurement.method || "objectGap",
@@ -59,10 +59,32 @@ SSM.PreviewEngine = (function () {
         }
         return entries;
     }
-    function findRule(rules, section) {
-        // Simplest: return first enabled rule; in future match by scope/detection
-        for (var i = 0; i < rules.length; i++) {
-            if (rules[i].enabled) { return rules[i]; }
+    function measureForRule(section, rule, doc) {
+        var anchor = section.anchor.original || section.anchor;
+        var target = section.target.original || section.target;
+        if (rule.direction === C.DIRECTIONS.VERTICAL || rule.direction === C.DIRECTIONS.AUTO) {
+            if (rule.measurementMode === "visual") {
+                return SSM.VisualGapEngine.visualVerticalGap(anchor, target, doc);
+            }
+            return SSM.ObjectGapEngine.verticalGap(anchor, target, rule.boundsType);
+        }
+        if (rule.direction === C.DIRECTIONS.HORIZONTAL) {
+            if (rule.measurementMode === "visual") {
+                return SSM.VisualGapEngine.visualHorizontalGap(anchor, target, doc);
+            }
+            return SSM.ObjectGapEngine.horizontalGap(anchor, target, rule.boundsType);
+        }
+        if (rule.direction === C.DIRECTIONS.BOTH) {
+            var v = (rule.measurementMode === "visual")
+                ? SSM.VisualGapEngine.visualVerticalGap(anchor, target, doc)
+                : SSM.ObjectGapEngine.verticalGap(anchor, target, rule.boundsType);
+            var h = (rule.measurementMode === "visual")
+                ? SSM.VisualGapEngine.visualHorizontalGap(anchor, target, doc)
+                : SSM.ObjectGapEngine.horizontalGap(anchor, target, rule.boundsType);
+            if (!v || !h) { return null; }
+            // Return combined; use vertical as primary for gap value
+            v.horizontal = h;
+            return v;
         }
         return null;
     }

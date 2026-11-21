@@ -28,20 +28,55 @@ SSM.UI.Measurement = (function () {
             var st = app.state.get();
             var sel = st.selection;
             if (!sel || sel.length < 2) { lblResult.text = "Select two objects first."; return; }
-            var upper = sel[0], lower = sel[1];
+            var first = sel[0], second = sel[1];
             var mode = ddMode.selection ? ddMode.selection.text : "Object Gap";
             var bounds = ddBounds.selection ? ddBounds.selection.text : "Geometric bounds";
             var bt = bounds.indexOf("Visible") !== -1 ? C.BOUNDS_TYPES.VISIBLE : (bounds.indexOf("Control") !== -1 ? C.BOUNDS_TYPES.CONTROL : C.BOUNDS_TYPES.GEOMETRIC);
+            var dirSel = ddDir.selection ? ddDir.selection.text : "Vertical";
+            var dir = dirSel === "Horizontal" ? C.DIRECTIONS.HORIZONTAL :
+                      dirSel === "Both axes" ? C.DIRECTIONS.BOTH :
+                      dirSel === "Auto detect" ? C.DIRECTIONS.AUTO : C.DIRECTIONS.VERTICAL;
             var measurement = null;
-            if (mode.indexOf("Visual") !== -1) {
-                measurement = SSM.VisualGapEngine.visualVerticalGap(upper.original, lower.original, null);
+            var isVisual = mode.indexOf("Visual") !== -1;
+            if (dir === C.DIRECTIONS.HORIZONTAL) {
+                measurement = isVisual
+                    ? SSM.VisualGapEngine.visualHorizontalGap(first.original, second.original, null)
+                    : SSM.ObjectGapEngine.horizontalGap(first.original, second.original, bt);
+            } else if (dir === C.DIRECTIONS.BOTH) {
+                var v = isVisual
+                    ? SSM.VisualGapEngine.visualVerticalGap(first.original, second.original, null)
+                    : SSM.ObjectGapEngine.verticalGap(first.original, second.original, bt);
+                var h = isVisual
+                    ? SSM.VisualGapEngine.visualHorizontalGap(first.original, second.original, null)
+                    : SSM.ObjectGapEngine.horizontalGap(first.original, second.original, bt);
+                if (v && h) { v.horizontal = h; measurement = v; }
+                else { measurement = v || h; }
+            } else if (dir === C.DIRECTIONS.AUTO) {
+                var v = isVisual
+                    ? SSM.VisualGapEngine.visualVerticalGap(first.original, second.original, null)
+                    : SSM.ObjectGapEngine.verticalGap(first.original, second.original, bt);
+                var h = isVisual
+                    ? SSM.VisualGapEngine.visualHorizontalGap(first.original, second.original, null)
+                    : SSM.ObjectGapEngine.horizontalGap(first.original, second.original, bt);
+                measurement = SSM.ObjectGapEngine.detectDirection(v, h);
+                // detectDirection returns a direction string, not a measurement; fall back to vertical
+                if (typeof measurement === "string") { measurement = v; }
             } else {
-                measurement = SSM.ObjectGapEngine.verticalGap(upper.original, lower.original, bt);
+                measurement = isVisual
+                    ? SSM.VisualGapEngine.visualVerticalGap(first.original, second.original, null)
+                    : SSM.ObjectGapEngine.verticalGap(first.original, second.original, bt);
             }
-            if (!measurement) { lblResult.text = "Cannot measure."; return; }
-            var norm = SSM.MeasurementNormalizer.normalizeGap(measurement, ddUnit.selection ? ddUnit.selection.text : "pt", parseInt(ddPrec.selection ? ddPrec.selection.text : "2", 10));
-            lblResult.text = "Result: " + norm.display + (measurement.overlaps ? " (OVERLAP)" : "");
-            lblRel.text = "Reliability: " + (measurement.reliability || "exact");
+            if (!measurement) { lblResult.text = "Cannot measure."; lblRel.text = "Reliability: —"; return; }
+            var unit = ddUnit.selection ? ddUnit.selection.text : "pt";
+            var prec = parseInt(ddPrec.selection ? ddPrec.selection.text : "2", 10);
+            var norm = SSM.MeasurementNormalizer.normalizeGap(measurement, unit, prec);
+            var dirLabel = dirSel;
+            if (measurement.horizontal) {
+                lblResult.text = "Result: V=" + norm.display + " H=" + SSM.MeasurementNormalizer.roundForDisplay(measurement.horizontal.gap, unit, prec) + (measurement.overlaps ? " (OVERLAP)" : "");
+            } else {
+                lblResult.text = "Result: " + norm.display + (measurement.overlaps ? " (OVERLAP)" : "");
+            }
+            lblRel.text = "Reliability: " + (measurement.reliability || "exact") + " (" + (measurement.method || "objectGap") + ")";
         };
         return { panel: panel };
     }

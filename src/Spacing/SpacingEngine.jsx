@@ -5,6 +5,9 @@ SSM.SpacingEngine = (function () {
     var DM = SSM.DocumentManager;
     var BM = SSM.BoundsManager;
     var Calculator = SSM.SpacingCalculator;
+    var PositionManager = SSM.PositionManager;
+    var TransactionManager = SSM.TransactionManager;
+    var TemporaryObjectManager = SSM.TemporaryObjectManager;
     var C = SSM.Constants;
     function applyToPair(upperItem, lowerItem, measurement, targetGapPt, anchorBehavior, doc) {
         var calc = Calculator.calculate(measurement, targetGapPt);
@@ -36,42 +39,88 @@ SSM.SpacingEngine = (function () {
         try {
             var item = itemRef.original || itemRef;
             if (!item) { return false; }
-            // Illustrator: move (dx, dy) where dy positive moves down (in screen coordinates)
-            item.translate(dxPt, -dyPt); // translate uses top-left origin, y down
+            // Illustrator translate(dx, dy): dy positive moves down in screen coordinates.
+            // Illustrator's y increases upward, so to move an object down by dyPt (toward
+            // smaller y / bottom), we translate by -dyPt in y.
+            item.translate(dxPt, -dyPt);
             return true;
         } catch (e) {
             SSM.Logger.warn("SpacingEngine.moveItemBy failed", e);
             return false;
         }
     }
+    // Apply spacing to all sections using their resolved rules. Wrapped in a transaction
+    // so partial operations can be rolled back on failure.
     function applyToSections(sections, rules, doc) {
         var results = [];
+        var txnId = null;
+        var itemsToSnapshot = [];
+        // Collect all anchor/target items for snapshot
         for (var s = 0; s < sections.length; s++) {
-            var section = sections[s];
-            if (!section.enabled) { continue; }
-            var anchor = section.anchor;
-            var target = section.target;
-            if (!anchor || !target) { continue; }
-            // Find applicable rule for this section (simplified: first enabled rule matching scope)
-            var rule = null;
-            for (var r = 0; r < rules.length; r++) {
-                if (rules[r].enabled && rules[r].scope === "document") { rule = rules[r]; break; }
-            }
-            if (!rule) { continue; }
-            var measurement = null;
-            if (rule.measurementMode === "visual") {
-                measurement = SSM.VisualGapEngine.visualVerticalGap(anchor.original, target.original, doc);
-            } else {
-                measurement = SSM.ObjectGapEngine.verticalGap(anchor.original, target.original, rule.boundsType);
-            }
-            if (!measurement) { continue; }
-            var targetPt = SSM.MeasurementNormalizer.targetGapToPoints(rule.targetGap, rule.unit);
-            var result = applyToPair(anchor, target, measurement, targetPt, rule.anchorBehavior, doc);
-            result.sectionId = section.id;
-            result.sectionName = section.name;
-            results.push(result);
+            var sec = sections[s];
+            if (!sec.enabled || !sec.anchor || !sec.target) { continue; }
+            itemsToSnapshot.push(sec.anchor);
+            itemsToSnapshot.push(sec.target);
         }
-        return results;
+        if (itemsToSnapshot.length > 0) {
+            txnId = TransactionManager.begin(itemsToSnapshot);
+        }
+        try {
+            for (var s = 0; s < sections.length; s++) {
+                var section = sections[s];
+                if (!section.enabled || !section.anchor || !section.target) { continue; }
+                // Resolve the specific rule for this section
+                var rule = SSM.RuleEngine.resolveRuleForSection(section, rules);
+                if (!rule || !rule.enabled) { continue; }
+                var anchor = section.anchor.original || section.anchor;
+                var target = section.target.original || section.target;
+                var measurement = measureForRule(section, rule, doc);
+                if (!measurement) { continue; }
+                var targetPt = SSM.MeasurementNormalizer.targetGapToPoints(rule.targetGap, rule.unit);
+                var result = applyToPair(section.anchor, section.target, measurement, targetPt, rule.anchorBehavior, doc);
+                result.sectionId = section.id;
+                result.sectionName = section.name;
+                result.ruleId = rule.id;
+                result.ruleName = rule.name;
+                results.push(result);
+            }
+            if (txnId) { TransactionManager.commit(); }
+            TemporaryObjectManager.cleanup(doc);
+            return { success: true, results: results };
+        } catch (e) {
+            SSM.Logger.error("SpacingEngine.applyToSections failed, rolling back", e);
+            if (txnId) { TransactionManager.rollback(); }
+            TemporaryObjectManager.cleanup(doc);
+            return { success: false, error: String(e), results: results };
+        }
+    }
+    function measureForRule(section, rule, doc) {
+        var anchor = section.anchor.original || section.anchor;
+        var target = section.target.original || section.target;
+        if (rule.direction === C.DIRECTIONS.VERTICAL || rule.direction === C.DIRECTIONS.AUTO) {
+            if (rule.measurementMode === "visual") {
+                return SSM.VisualGapEngine.visualVerticalGap(anchor, target, doc);
+            }
+            return SSM.ObjectGapEngine.verticalGap(anchor, target, rule.boundsType);
+        }
+        if (rule.direction === C.DIRECTIONS.HORIZONTAL) {
+            if (rule.measurementMode === "visual") {
+                return SSM.VisualGapEngine.visualHorizontalGap(anchor, target, doc);
+            }
+            return SSM.ObjectGapEngine.horizontalGap(anchor, target, rule.boundsType);
+        }
+        if (rule.direction === C.DIRECTIONS.BOTH) {
+            var v = (rule.measurementMode === "visual")
+                ? SSM.VisualGapEngine.visualVerticalGap(anchor, target, doc)
+                : SSM.ObjectGapEngine.verticalGap(anchor, target, rule.boundsType);
+            var h = (rule.measurementMode === "visual")
+                ? SSM.VisualGapEngine.visualHorizontalGap(anchor, target, doc)
+                : SSM.ObjectGapEngine.horizontalGap(anchor, target, rule.boundsType);
+            if (!v || !h) { return null; }
+            v.horizontal = h;
+            return v;
+        }
+        return null;
     }
     return {
         applyToPair: applyToPair,
