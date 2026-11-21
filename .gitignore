@@ -1,0 +1,11 @@
+node_modules/
+dist/*.jsx
+dist/*.sha256
+dist/release-meta.json
+*.log
+.DS_Thumbs
+Thumbs.db
+arena/
+.cache/
+.local/
+.npm/
